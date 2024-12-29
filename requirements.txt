@@ -3,5 +3,9 @@ pandas
 numpy
 altair
 yfinance
+tensorflow
 scikit-learn
 plotly
+transformers
+torch
+nsepython
