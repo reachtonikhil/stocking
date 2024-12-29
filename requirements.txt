@@ -1,7 +1,7 @@
-streamlit==1.25.0
-pandas==1.5.3
-numpy==1.24.3
-altair==5.0.1
-yfinance==0.2.26
-scikit-learn==1.2.2
-plotly==5.17.0
+streamlit
+pandas
+numpy
+altair
+yfinance
+scikit-learn
+plotly
