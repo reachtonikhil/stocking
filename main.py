@@ -70,33 +70,16 @@ if stock_symbol:
 
         # Plot historical closing prices
         st.markdown("### Historical Closing Prices")
+  
         line_chart = alt.Chart(historical_data).mark_line().encode(
             x=alt.X('Date:T', title='Date'),
-            y=alt.Y('Close', title='Closing Price (₹)'),
-            tooltip=['Date:T', 'Close']
+            y=alt.Y('Close:Q', title='Closing Price (₹)'),  # Specify quantitative type explicitly
+            tooltip=['Date:T', 'Close:Q']
         ).properties(
             title=f"Historical Closing Prices for {company_name}"
         )
         st.altair_chart(line_chart, use_container_width=True)
 
-        # Calculate and display moving averages
-        st.markdown("### Moving Averages")
-        historical_data['SMA_10'] = historical_data['Close'].rolling(window=10).mean()
-        historical_data['SMA_30'] = historical_data['Close'].rolling(window=30).mean()
-        moving_avg_chart = alt.Chart(historical_data).mark_line().encode(
-            x='Date:T',
-            y=alt.Y('Close', title='Price (₹)'),
-            color=alt.value('blue')
-        ).properties(
-            title=f"Moving Averages for {company_name}"
-        ) + alt.Chart(historical_data).mark_line(color='orange').encode(
-            x='Date:T',
-            y=alt.Y('SMA_10', title='SMA 10 Days')
-        ) + alt.Chart(historical_data).mark_line(color='green').encode(
-            x='Date:T',
-            y=alt.Y('SMA_30', title='SMA 30 Days')
-        )
-        st.altair_chart(moving_avg_chart, use_container_width=True)
 
         # Predictive Analytics
         st.markdown("### Predictive Analytics")
@@ -121,16 +104,23 @@ if stock_symbol:
         # Future prediction
         st.markdown("### Future Price Prediction")
         future_days = st.slider("Select days for prediction:", 1, 30, 7)
-        future_day_indices = np.arange(len(historical_data), len(historical_data) + future_days).reshape(-1, 1)
-        future_predictions = model.predict(future_day_indices)
 
+        # Generate future day indices
+        future_day_indices = np.arange(len(historical_data), len(historical_data) + future_days).reshape(-1, 1)
+
+        # Ensure predictions are flattened to 1D
+        future_predictions = model.predict(future_day_indices).flatten()
+
+        # Create a DataFrame for future predictions
         future_df = pd.DataFrame({
             'Day': np.arange(len(historical_data), len(historical_data) + future_days),
             'Predicted Price': future_predictions
         })
+
+        # Display the DataFrame
         st.write(future_df)
 
-        # Display future price predictions
+        # Display future price predictions using Altair
         prediction_chart = alt.Chart(future_df).mark_line(color='red').encode(
             x=alt.X('Day', title='Day Index'),
             y=alt.Y('Predicted Price', title='Predicted Price (₹)')
