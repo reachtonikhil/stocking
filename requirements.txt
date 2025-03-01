@@ -9,3 +9,4 @@ plotly
 transformers
 torch
 nsepython
+vaderSentiment
