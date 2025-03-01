@@ -4,19 +4,28 @@ import altair as alt
 from nsepython import nse_eq
 import yfinance as yf
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error, r2_score
 import numpy as np
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # Set up the Streamlit page configuration
 st.set_page_config(
-    page_title="Indian Stock Price Visualization",
+    page_title="Indian Stock Price Visualization and Analysis",
     page_icon="📈",
     layout="wide"
 )
 
 # Title of the application
 st.title("📈 Indian Stock Price Visualization and Analysis")
+
+# Sentiment analysis function using VADER
+def get_sentiment(text):
+    analyzer = SentimentIntensityAnalyzer()
+    sentiment_score = analyzer.polarity_scores(text)
+    return sentiment_score['compound']  # Returns a score between -1 (negative) and 1 (positive)
 
 # Input: Stock symbol
 stock_symbol = st.text_input("Enter the NSE stock symbol (e.g., RELIANCE):", value="RELIANCE")
@@ -64,66 +73,120 @@ if stock_symbol:
 
         # Fetch historical data using yfinance
         st.markdown("### Historical Stock Data")
-        historical_data = yf.download(f"{stock_symbol}.NS", period="6mo", interval="1d")
+        historical_data = yf.download(f"{stock_symbol}.NS", period="1y", interval="1d")
         historical_data.reset_index(inplace=True)
         st.write(historical_data.tail())
 
+        # Calculate moving averages for additional features
+        historical_data['MA_5'] = historical_data['Close'].rolling(window=5).mean()  # 5-day moving average
+        historical_data['MA_20'] = historical_data['Close'].rolling(window=20).mean()  # 20-day moving average
+
+        # Example News Headline for Sentiment Analysis
+        news_headline = "TCS reports stellar quarterly earnings and optimistic future outlook."
+        sentiment_score = get_sentiment(news_headline)
+        st.write(f"Sentiment score for the news: {sentiment_score}")
+
+        # Add sentiment score to the historical data
+        historical_data['Sentiment'] = sentiment_score
+
         # Plot historical closing prices
         st.markdown("### Historical Closing Prices")
-  
         line_chart = alt.Chart(historical_data).mark_line().encode(
             x=alt.X('Date:T', title='Date'),
-            y=alt.Y('Close:Q', title='Closing Price (₹)'),  # Specify quantitative type explicitly
+            y=alt.Y('Close:Q', title='Closing Price (₹)'),
             tooltip=['Date:T', 'Close:Q']
         ).properties(
             title=f"Historical Closing Prices for {company_name}"
         )
         st.altair_chart(line_chart, use_container_width=True)
 
-
-        # Predictive Analytics
-        st.markdown("### Predictive Analytics")
+        # Prepare data for LSTM-based predictive analytics
+        st.markdown("### Predictive Analytics with LSTM")
         historical_data['Day'] = np.arange(len(historical_data))
-        X = historical_data[['Day']]
-        y = historical_data['Close']
+        features = historical_data[['Day', 'Sentiment', 'MA_5', 'MA_20']]  # Adding moving averages as features
+        target = historical_data['Close']
+
+        # Scale data for LSTM model
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_data = scaler.fit_transform(historical_data['Close'].values.reshape(-1, 1))
+
+        # Prepare data for LSTM (using past 60 days to predict the next day)
+        look_back = 60
+        X_lstm, y_lstm = [], []
+        for i in range(look_back, len(scaled_data)):
+            X_lstm.append(scaled_data[i-look_back:i, 0])
+            y_lstm.append(scaled_data[i, 0])
+
+        X_lstm, y_lstm = np.array(X_lstm), np.array(y_lstm)
+
+        # Reshape data for LSTM input [samples, time steps, features]
+        X_lstm = X_lstm.reshape(X_lstm.shape[0], X_lstm.shape[1], 1)
 
         # Train-test split
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        train_size = int(len(X_lstm) * 0.8)
+        X_train, X_test = X_lstm[:train_size], X_lstm[train_size:]
+        y_train, y_test = y_lstm[:train_size], y_lstm[train_size:]
 
-        # Train Linear Regression model
-        model = LinearRegression()
-        model.fit(X_train, y_train)
+        # Build LSTM model with dropout layers to prevent overfitting
+        model = Sequential()
+        model.add(LSTM(units=50, return_sequences=True, input_shape=(X_train.shape[1], 1)))
+        model.add(Dropout(0.2))  # Dropout layer for regularization
+        model.add(LSTM(units=50, return_sequences=False))
+        model.add(Dropout(0.2))  # Dropout layer for regularization
+        model.add(Dense(units=1))  # Output layer
+
+        model.compile(optimizer='adam', loss='mean_squared_error')
+
+        # Train the LSTM model
+        model.fit(X_train, y_train, epochs=20, batch_size=32)
 
         # Make predictions
         y_pred = model.predict(X_test)
         
-        # Display metrics
+        # Inverse transform predictions to get actual stock prices
+        predicted_prices = scaler.inverse_transform(y_pred)
+
+        # Format the predicted prices to two decimal places for proper rupees format
+        formatted_predicted_prices = np.round(predicted_prices.flatten(), 2)
+
+        # Display model evaluation metrics
         st.write(f"Mean Squared Error: {mean_squared_error(y_test, y_pred):.2f}")
         st.write(f"R-squared: {r2_score(y_test, y_pred):.2f}")
 
-        # Future prediction
+        # Future prediction using LSTM
         st.markdown("### Future Price Prediction")
         future_days = st.slider("Select days for prediction:", 1, 30, 7)
 
-        # Generate future day indices
-        future_day_indices = np.arange(len(historical_data), len(historical_data) + future_days).reshape(-1, 1)
+        # Get the last day from the historical data
+        last_day = historical_data['Day'].iloc[-1]
+
+        # Generate future day indices relative to the last day
+        future_day_indices = np.arange(last_day + 1, last_day + 1 + future_days)
 
         # Ensure predictions are flattened to 1D
-        future_predictions = model.predict(future_day_indices).flatten()
+        future_predictions = model.predict(future_day_indices.reshape(-1, 1)).flatten()
 
-        # Create a DataFrame for future predictions
+        # Inverse scaling for future predictions
+        future_predictions_scaled = scaler.inverse_transform(future_predictions.reshape(-1, 1))
+
+        # Format future predicted prices to 2 decimal places
+        formatted_future_predictions = np.round(future_predictions_scaled.flatten(), 2)
+
+        # Create a DataFrame for future predictions with formatted values
         future_df = pd.DataFrame({
-            'Day': np.arange(len(historical_data), len(historical_data) + future_days),
-            'Predicted Price': future_predictions
+            'Predicted Price (₹)': formatted_future_predictions  # Remove the Day column
         })
 
-        # Display the DataFrame
+        # Add the index as a column for Altair to use it in the plot
+        future_df['Day Index'] = future_df.index + 1  # Adding 1 to start from 1 instead of 0
+
+        # Display the DataFrame with proper formatting (remove 'Day' column)
         st.write(future_df)
 
-        # Display future price predictions using Altair
+        # Display future price predictions using Altair with formatted prices
         prediction_chart = alt.Chart(future_df).mark_line(color='red').encode(
-            x=alt.X('Day', title='Day Index'),
-            y=alt.Y('Predicted Price', title='Predicted Price (₹)')
+            x=alt.X('Day Index:O', title='Day Index'),  # Use 'Day Index' for the x-axis
+            y=alt.Y('Predicted Price (₹):Q', title='Predicted Price (₹)')
         ).properties(
             title=f"Future Price Predictions for {company_name}"
         )
